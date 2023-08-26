@@ -1,77 +1,99 @@
 #!/bin/bash
 
-PR_COMMIT_RESPONSE=""
-PR_ID=""
-PR_DETAIL_RESPONSE=""
-
-PR_TITLE=""
-PR_LINK=""
-
-SHORT_COMMIT_HASH=""
+pr_title=""
+pr_link=""
+gitops_new_pr_id=""
+source_branch_name=""
+reviewer_uuids_json=""
 
 function prepare_pr_metadata {
-  PR_COMMIT_RESPONSE=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$BITBUCKET_REPO_SLUG/commit/$BITBUCKET_COMMIT/pullrequests" \
+  _pr_commit_response=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$BITBUCKET_REPO_SLUG/commit/$BITBUCKET_COMMIT/pullrequests" \
     --request GET \
     --header "Content-Type: application/json" \
     --header "Authorization: Bearer $GITOPS_SOURCE_ACCESS_TOKEN")
 
-  PR_ID=$(echo "$PR_COMMIT_RESPONSE" | jq -r ".values[0].id")
+  _pr_id=$(echo "$_pr_commit_response" | jq -r ".values[0].id")
 
-  PR_DETAIL_RESPONSE=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$BITBUCKET_REPO_SLUG/pullrequests/$PR_ID" \
+  _pr_detail_response=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$BITBUCKET_REPO_SLUG/pullrequests/$_pr_id" \
     --request GET \
     --header "Content-Type: application/json" \
     --header "Authorization: Bearer $GITOPS_SOURCE_ACCESS_TOKEN")
 
-  PR_TITLE=$(echo "$PR_DETAIL_RESPONSE" | jq -r ".title")
-  PR_LINK=$(echo "$PR_DETAIL_RESPONSE" | jq -r ".links.html.href")
+  pr_title=$(echo "$_pr_detail_response" | jq -r ".title")
+  pr_link=$(echo "$_pr_detail_response" | jq -r ".links.html.href")
 }
 
 function pulling_gitops_code {
   cd /tmp || exit
-  git clone https://x-token-auth:"$GITOPS_ACCESS_TOKEN"@bitbucket.org/est-rouge/"$GITOPS_REPO".git
+  git clone https://x-token-auth:"$GITOPS_ACCESS_TOKEN"@bitbucket.org/"$BITBUCKET_REPO_OWNER"/"$GITOPS_REPO".git
+
+  # Switch to the specified destination branch (PR will be merged into this branch)
   cd /tmp/"$GITOPS_REPO" || exit
-  git checkout develop
-  SHORT_COMMIT_HASH=$(git rev-parse --short HEAD | awk 'NF > 0')
-  BRANCH_NAME="release/$SHORT_COMMIT_HASH"
-  git checkout -b "$BRANCH_NAME"
-  sed -i -e "s|tag        = \".*\"|tag        = \"$SHORT_COMMIT_HASH\"|g" waypoint.hcl
+  git checkout "$GITOPS_DESTINATION_BRANCH"
+
+  # Generate a short commit hash and construct a new branch name
+  _short_commit_hash=$(git rev-parse --short HEAD | awk 'NF > 0')
+  source_branch_name="$GITOPS_SOURCE_BRANCH_PREFIX/$_short_commit_hash"
+  git checkout -b "$source_branch_name"
+
+  # Update the 'tag' value in the 'waypoint.hcl' file with the commit hash
+  sed -i -e "s|tag        = \".*\"|tag        = \"$_short_commit_hash\"|g" waypoint.hcl
+
+  # Configure the GitOps bot user's email
   git config user.email "$GITOPS_BOT_EMAIL"
+
+  # Push the changes forcefully to the remote repository
   git add .
-  git commit -m "chore: $PR_TITLE ($PR_LINK)"
-  git push origin "$BRANCH_NAME" -f
+  git commit -m "chore: $pr_title ($pr_link)"
+  git push origin "$source_branch_name" -f
+}
+
+function convert_uuids_to_reviewers {
+  # Split the input string by ";"
+  IFS=';' read -ra uuids <<<"$BITBUCKET_REVIEWER_UUIDS"
+
+  _json_array_uuids=()
+
+  # Loop through each UUID and create the JSON object
+  for uuid in "${uuids[@]}"; do
+    _json_object="{ \"uuid\": \"$uuid\" }"
+    _json_array_uuids+=("$_json_object")
+  done
+
+  # Convert the array to a JSON-formatted string
+  reviewer_uuids_json="[ $(
+    IFS=,
+    echo "${_json_array_uuids[*]}"
+  ) ]"
 }
 
 function create_new_pr {
   cat <<EOF | tee /tmp/json_payload.json
 {
-  "title": "chore: $PR_TITLE ($PR_LINK)",
+  "title": "chore: $pr_title ($pr_link)",
   "source": {
     "branch": {
-      "name": "$BRANCH_NAME"
+      "name": "$source_branch_name"
     }
   },
   "destination": {
     "branch": {
-      "name": "develop"
+      "name": "$GITOPS_DESTINATION_BRANCH"
     }
   },
   "summary": {
-    "raw": "chore: $PR_TITLE ($PR_LINK)"
+    "raw": "chore: $pr_title ($pr_link)"
   },
-  "reviewers": [
-    {
-      "uuid": "{7ff3a816-c6c7-4cd7-8133-fdf7f285ab62}"
-    }
-  ]
+  "reviewers": $reviewer_uuids_json
 }
 EOF
 
-  NEW_PR_RESPONSE=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$GITOPS_REPO/pullrequests" \
+  _new_pr_response=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$GITOPS_REPO/pullrequests" \
     --request POST \
     --header "Content-Type: application/json" \
     --header "Authorization: Bearer $GITOPS_ACCESS_TOKEN" \
     --data @/tmp/json_payload.json)
-  NEW_PR_ID=$(echo "$NEW_PR_RESPONSE" | jq -r ".id")
+  gitops_new_pr_id=$(echo "$_new_pr_response" | jq -r ".id")
 }
 
 function create_new_comment {
@@ -83,7 +105,7 @@ function create_new_comment {
 }
 EOF
 
-  NEW_PR_RESPONSE=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$GITOPS_REPO/pullrequests/${NEW_PR_ID}/comments" \
+  _new_pr_response=$(curl "https://api.bitbucket.org/2.0/repositories/$BITBUCKET_REPO_OWNER/$GITOPS_REPO/pullrequests/${gitops_new_pr_id}/comments" \
     --request POST \
     --header "Content-Type: application/json" \
     --header "Authorization: Bearer $GITOPS_ACCESS_TOKEN" \
@@ -92,5 +114,6 @@ EOF
 
 prepare_pr_metadata
 pulling_gitops_code
+convert_uuids_to_reviewers
 create_new_pr
 create_new_comment
