@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+      - name: Lint the Dockerfile
+        uses: hadolint/hadolint-action@v1.5.0
+        with:
+          dockerfile: Dockerfile

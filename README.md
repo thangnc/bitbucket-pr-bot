@@ -27,11 +27,18 @@ On each run, the bot will:
       --env GITOPS_ACCESS_TOKEN \      
       --env GITOPS_BOT_EMAIL \      
       --env GITOPS_REPO \
+      --env GITOPS_DESTINATION_BRANCH \
+      --env GITOPS_SOURCE_BRANCH_PREFIX \
       --env BITBUCKET_COMMIT \
       --env BITBUCKET_REPO_OWNER \
       --env BITBUCKET_REPO_SLUG \
-      cc-bot:latest
+      --env BITBUCKET_REVIEWER_UUIDS \
+      bitbucket-pr-bot:latest
 ```
+
+- `GITOPS_DESTINATION_BRANCH`: The branch that PR will be merged and deployed to environments such as `main`, `master`, `develop`, `stg`, `qa`
+- `GITOPS_SOURCE_BRANCH_PREFIX`: The prefix of the branch name that PR will be created from such as `qa` for testing, `stg` for staging, `release` for production
+- `BITBUCKET_REVIEWER_UUIDS` The list of string UUID of reviewers separated by `;`. E.g `{7ff3a816-c6c7-4cd7-8133};{7ff3a816-c6c7-4cd7-8133}`
 
 ### Bitbucket Pipelines example
 
