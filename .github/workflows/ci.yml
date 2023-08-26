@@ -11,10 +11,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container:
-      image: hadolint/hadolint:latest-debian
     timeout-minutes: 10
 
     steps:
+      - name: Check out code
+        uses: actions/checkout@v3
       - name: Lint the Dockerfile
-        run: hadolint Dockerfile
+        uses: hadolint/hadolint-action@v1.5.0
+        with:
+          dockerfile: Dockerfile
